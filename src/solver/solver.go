@@ -1,8 +1,6 @@
 package solver
 
-import (
-	"fmt"
-)
+import "fmt"
 
 const (
 	Empty = 0
@@ -15,54 +13,60 @@ type Point struct {
 
 type Grid struct {
 	Size    int
-	Regions [][]int // Map each cell (r, c) to a region ID
-	Stars   int     // Stars per row/col/region (usually 2)
+	Regions [][]int
+	Stars   int
 }
 
 type State struct {
-	Cells [][]int
+	Cells        [][]int
+	RowCounts    []int
+	ColCounts    []int
+	RegionCounts map[int]int
 }
 
-func NewState(size int) *State {
-	cells := make([][]int, size)
+func NewState(g Grid) *State {
+	cells := make([][]int, g.Size)
 	for i := range cells {
-		cells[i] = make([]int, size)
+		cells[i] = make([]int, g.Size)
 	}
-	return &State{Cells: cells}
+
+	return &State{
+		Cells:        cells,
+		RowCounts:    make([]int, g.Size),
+		ColCounts:    make([]int, g.Size),
+		RegionCounts: make(map[int]int),
+	}
 }
 
 func Solve(g Grid) ([][]int, error) {
-	state := NewState(g.Size)
-	if solveRecursive(g, state, 0, 0, 0) {
-		return state.Cells, nil
+	s := NewState(g)
+
+	if solve(g, s, 0, 0) {
+		return s.Cells, nil
 	}
 	return nil, fmt.Errorf("no solution found")
 }
 
-func solveRecursive(g Grid, s *State, row, col, starsPlaced int) bool {
-	if starsPlaced == g.Size*g.Stars {
+func solve(g Grid, s *State, r, c int) bool {
+	if r == g.Size {
 		return true
 	}
 
-	// Move to next cell
-	nextRow, nextCol := row, col+1
-	if nextCol == g.Size {
-		nextRow, nextCol = row+1, 0
+	nr, nc := r, c+1
+	if nc == g.Size {
+		nr, nc = r+1, 0
 	}
 
-	// Try placing a star
-	if canPlaceStar(g, s, row, col) {
-		s.Cells[row][col] = Star
-		if solveRecursive(g, s, nextRow, nextCol, starsPlaced+1) {
+	if canPlace(g, s, r, c) {
+		place(g, s, r, c)
+		if solve(g, s, nr, nc) {
 			return true
 		}
-		s.Cells[row][col] = Empty
+		unplace(g, s, r, c)
 	}
 
-	// Try not placing a star
-	// Optimization: check if it's still possible to reach required stars
-	if canSkipCell(g, s, row, col) {
-		if solveRecursive(g, s, nextRow, nextCol, starsPlaced) {
+	if canSkip(g, s, r, c) {
+		if solve(g, s, nr, nc) {
 			return true
 		}
 	}
@@ -70,44 +74,19 @@ func solveRecursive(g Grid, s *State, row, col, starsPlaced int) bool {
 	return false
 }
 
-func canPlaceStar(g Grid, s *State, r, c int) bool {
-	// Check row
-	rowCount := 0
-	for i := 0; i < g.Size; i++ {
-		if s.Cells[r][i] == Star {
-			rowCount++
-		}
+func canPlace(g Grid, s *State, r, c int) bool {
+	if s.RowCounts[r] >= g.Stars {
+		return false
 	}
-	if rowCount >= g.Stars {
+	if s.ColCounts[c] >= g.Stars {
 		return false
 	}
 
-	// Check col
-	colCount := 0
-	for i := 0; i < g.Size; i++ {
-		if s.Cells[i][c] == Star {
-			colCount++
-		}
-	}
-	if colCount >= g.Stars {
+	region := g.Regions[r][c]
+	if s.RegionCounts[region] >= g.Stars {
 		return false
 	}
 
-	// Check region
-	regionID := g.Regions[r][c]
-	regionCount := 0
-	for i := 0; i < g.Size; i++ {
-		for j := 0; j < g.Size; j++ {
-			if g.Regions[i][j] == regionID && s.Cells[i][j] == Star {
-				regionCount++
-			}
-		}
-	}
-	if regionCount >= g.Stars {
-		return false
-	}
-
-	// Check adjacency (8 neighbors)
 	for dr := -1; dr <= 1; dr++ {
 		for dc := -1; dc <= 1; dc++ {
 			if dr == 0 && dc == 0 {
@@ -125,22 +104,40 @@ func canPlaceStar(g Grid, s *State, r, c int) bool {
 	return true
 }
 
-func canSkipCell(g Grid, s *State, r, c int) bool {
-	// If skipping this cell makes it impossible to fill the row/col/region, return false
+func place(g Grid, s *State, r, c int) {
+	s.Cells[r][c] = Star
+	s.RowCounts[r]++
+	s.ColCounts[c]++
+	region := g.Regions[r][c]
+	s.RegionCounts[region]++
+}
 
-	// Check row remaining capacity
-	rowStars := 0
-	for i := 0; i < c; i++ {
-		if s.Cells[r][i] == Star {
-			rowStars++
-		}
-	}
-	remainingInRow := g.Size - 1 - c
-	if rowStars+remainingInRow < g.Stars {
+func unplace(g Grid, s *State, r, c int) {
+	s.Cells[r][c] = Empty
+	s.RowCounts[r]--
+	s.ColCounts[c]--
+	region := g.Regions[r][c]
+	s.RegionCounts[region]--
+}
+
+func canSkip(g Grid, s *State, r, c int) bool {
+	// Row check
+	remainingRow := g.Size - c - 1
+	if s.RowCounts[r]+remainingRow < g.Stars {
 		return false
 	}
 
-	// Simplified check: we can always skip if there's enough space left in the row.
-	// For more efficiency, we should also check columns and regions.
+	// Column check
+	remainingCol := g.Size - r - 1
+	if s.ColCounts[c]+remainingCol < g.Stars {
+		return false
+	}
+
+	// Region check (weak but cheap)
+	region := g.Regions[r][c]
+	if s.RegionCounts[region] > g.Stars {
+		return false
+	}
+
 	return true
 }

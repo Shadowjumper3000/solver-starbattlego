@@ -59,12 +59,13 @@ func promptInt(reader *bufio.Reader, prompt string, defaultValue int, min int, m
 
 func main() {
 	cfg := config.Load()
-	vision.SetDebugOutput(cfg.Debug, cfg.DebugImagesDir)
 	if cfg.Debug {
-		fmt.Printf("Debug output enabled. Writing images to %s\n", cfg.DebugImagesDir)
-	} else {
-		fmt.Println("Debug output disabled. Set DEBUG=true in .env/.env.example or run with -debug.")
+		fmt.Printf("Debug mode enabled (no vision debug sink configured)\n")
 	}
+
+	// Use the template vision implementation; swap with a real implementation
+	// by providing a different Vision via dependency injection.
+	v := vision.NewTemplateVision()
 
 	n := screenshot.NumActiveDisplays()
 	if n <= 0 {
@@ -72,7 +73,6 @@ func main() {
 	}
 	mainDisplay := screenshot.GetDisplayBounds(0)
 
-	// Use overlay to select area. Pass empty stars to trigger selection mode.
 	fmt.Println("Please draw a box around the puzzle grid (in the overlay window)...")
 	overlay.SelectAreaWithCallback(mainDisplay.Dx(), mainDisplay.Dy(), func(selectedArea image.Rectangle) {
 		fmt.Printf("Area selected: %v\n", selectedArea)
@@ -83,35 +83,12 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to capture screen: %v", err)
 		}
-		if err := vision.SaveDebugImage(fullImg, "debug_full.png"); err != nil {
-			log.Printf("Failed to save debug_full.png: %v", err)
-		} else if cfg.Debug {
-			fmt.Println("Saved debug_full.png for inspection")
-		}
 
-		// Crop to selection
-		croppedImg := image.NewRGBA(image.Rect(0, 0, selectedArea.Dx(), selectedArea.Dy()))
-		for y := 0; y < selectedArea.Dy(); y++ {
-			for x := 0; x < selectedArea.Dx(); x++ {
-				croppedImg.Set(x, y, fullImg.At(selectedArea.Min.X+x, selectedArea.Min.Y+y))
-			}
-		}
-
-		fmt.Println("Parsing grid in selected area...")
-		debugImg, grid, bounds, err := vision.ParseGrid(croppedImg)
+		// Use the vision implementation to process the selection and return a Grid
+		grid, bounds, err := v.ProcessSelection(fullImg, selectedArea)
 		if err != nil {
-			if debugImg != nil {
-				_ = vision.SaveDebugImage(debugImg, "debug_grid.png")
-			}
-			log.Fatalf("Failed to parse grid: %v", err)
+			log.Fatalf("Vision template failed: %v", err)
 		}
-		_ = vision.SaveDebugImage(debugImg, "debug_grid.png")
-
-		// Adjust bounds back to global screen coordinates
-		bounds.Min.X += selectedArea.Min.X
-		bounds.Max.X += selectedArea.Min.X
-		bounds.Min.Y += selectedArea.Min.Y
-		bounds.Max.Y += selectedArea.Min.Y
 
 		fmt.Printf("Grid found at %v, size %dx%d\n", bounds, grid.Size, grid.Size)
 
@@ -135,7 +112,7 @@ func main() {
 			log.Fatalf("Failed to solve: %v", err)
 		}
 
-		// Map solution to global screen coordinates
+		// Map solution to global screen coordinates for overlay
 		var stars []overlay.StarPos
 		cellW := float32(bounds.Dx()) / float32(grid.Size)
 		cellH := float32(bounds.Dy()) / float32(grid.Size)
@@ -151,7 +128,6 @@ func main() {
 		}
 
 		fmt.Printf("Found %d stars. Press 'Q' to exit.\n", len(stars))
-		// Update overlay with stars
 		overlay.SetOverlayStars(stars)
 	})
 }
